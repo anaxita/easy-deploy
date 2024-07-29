@@ -54,8 +54,8 @@ func CloneAndBuild(repoURL string) error {
 	// Сборка Docker-образа
 	logger.Info("Building Docker image")
 	buildCmd := exec.Command("docker", "build", "-t", path.Base(repoURL), tempDir)
-	if err := buildCmd.Run(); err != nil {
-		return fmt.Errorf("failed to build Docker image: %w", err)
+	if b, err := buildCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to build Docker image: %w: %s", err, string(b))
 	}
 
 	// Поиск свободного порта
