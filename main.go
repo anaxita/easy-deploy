@@ -24,7 +24,7 @@ type Config struct {
 	HTTPPort int `json:"http_port"`
 }
 
-var logger = slog.New(slog.NewJSONHandler(os.Stdout, nil))
+var logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 // RequestPayload представляет JSON-данные из запроса.
 type RequestPayload struct {
@@ -41,12 +41,14 @@ func CloneAndBuild(repoURL *url.URL) error {
 	defer os.RemoveAll(tempDir)
 
 	// Клонирование репозитория
-	logger.Info("Cloning repository", "repoURL", repoURL, "temp_dir", tempDir)
+	logger.Info("Cloning repository", "repoURL", repoURL.String(), "temp_dir", tempDir)
 
 	cloneCmd := exec.Command("git", "clone", repoURL.String(), tempDir)
 	if b, err := cloneCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to clone repository: %w: %s", err, string(b))
 	}
+
+	logger.Info("Repository cloned")
 
 	// Проверка наличия Dockerfile
 	dockerfilePath := filepath.Join(tempDir, "Dockerfile")
@@ -54,10 +56,26 @@ func CloneAndBuild(repoURL *url.URL) error {
 		return fmt.Errorf("Dockerfile not found in repository")
 	}
 
+	logger.Info("Dockerfile found", "path", dockerfilePath)
+
+	// Получение хэша последнего коммита
+	lastCommitHashCmd := exec.Command("git", "-C", tempDir, "rev-parse", "--short", "HEAD")
+	b, err := lastCommitHashCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to get last commit hash: %w: %s", err, string(b))
+	}
+
+	lastCommitShortHash := strings.TrimSpace(string(b))
+
+	logger.Info("Last commit hash", "hash", lastCommitShortHash)
+
 	// Сборка Docker-образа
 	imageName := repoURL.Host + repoURL.Path
+	imageTag := lastCommitShortHash
+	imageFullName := fmt.Sprintf("%s:%s", imageName, imageTag)
+
 	logger.Info("Building Docker image")
-	buildCmd := exec.Command("docker", "build", "-t", imageName, tempDir)
+	buildCmd := exec.Command("docker", "build", "-t", imageFullName, tempDir)
 	if b, err := buildCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to build Docker image: %w: %s", err, string(b))
 	}
@@ -66,7 +84,7 @@ func CloneAndBuild(repoURL *url.URL) error {
 
 	logger.Info("Checking if container is running")
 	isContainerRunning := exec.Command("docker", "ps", "-q", "--filter", fmt.Sprintf("ancestor=%s", imageName))
-	b, err := isContainerRunning.CombinedOutput()
+	b, err = isContainerRunning.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to check if container is running: %w: %s", err, string(b))
 	}
@@ -109,7 +127,7 @@ func CloneAndBuild(repoURL *url.URL) error {
 
 	// Запуск Docker-контейнера
 	logger.Info("Running Docker container")
-	runCmd := exec.Command("docker", "run", "-d", "-p", fmt.Sprintf("%d:80", port), imageName)
+	runCmd := exec.Command("docker", "run", "-d", "-p", fmt.Sprintf("%d:80", port), imageFullName)
 	if err := runCmd.Run(); err != nil {
 		return fmt.Errorf("failed to run Docker container: %w", err)
 	}
@@ -225,6 +243,7 @@ func CorsMiddleware(next http.Handler) http.Handler {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
+
 		next.ServeHTTP(w, r)
 	})
 }
