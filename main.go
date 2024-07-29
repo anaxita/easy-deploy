@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,11 +9,13 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
-	"path"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -29,7 +32,7 @@ type RequestPayload struct {
 }
 
 // CloneAndBuild выполняет клонирование репозитория, сборку Docker-образа и запуск контейнера.
-func CloneAndBuild(repoURL string) error {
+func CloneAndBuild(repoURL *url.URL) error {
 	// Создание временного каталога для клонирования репозитория
 	tempDir, err := os.MkdirTemp("", "repo-*")
 	if err != nil {
@@ -40,7 +43,7 @@ func CloneAndBuild(repoURL string) error {
 	// Клонирование репозитория
 	logger.Info("Cloning repository", "repoURL", repoURL, "temp_dir", tempDir)
 
-	cloneCmd := exec.Command("git", "clone", repoURL, tempDir)
+	cloneCmd := exec.Command("git", "clone", repoURL.String(), tempDir)
 	if b, err := cloneCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to clone repository: %w: %s", err, string(b))
 	}
@@ -52,25 +55,66 @@ func CloneAndBuild(repoURL string) error {
 	}
 
 	// Сборка Docker-образа
+	imageName := repoURL.Host + repoURL.Path
 	logger.Info("Building Docker image")
-	buildCmd := exec.Command("docker", "build", "-t", path.Base(repoURL), tempDir)
+	buildCmd := exec.Command("docker", "build", "-t", imageName, tempDir)
 	if b, err := buildCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to build Docker image: %w: %s", err, string(b))
 	}
 
-	// Поиск свободного порта
-	port, err := findFreePort()
+	logger.Info("Docker image built", "image", imageName)
+
+	logger.Info("Checking if container is running")
+	isContainerRunning := exec.Command("docker", "ps", "-q", "--filter", fmt.Sprintf("ancestor=%s", imageName))
+	b, err := isContainerRunning.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to find free port: %w", err)
+		return fmt.Errorf("failed to check if container is running: %w: %s", err, string(b))
 	}
-	logger.Info("Found free port", slog.Int("port", port))
+
+	containerID := strings.TrimSpace(string(b))
+
+	var port int
+	if containerID != "" {
+		logger.Info("Container is running", "containerID", containerID)
+
+		portCmd := exec.Command("docker", "port", containerID)
+		b, err := portCmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed to get container port: %w: %s", err, string(b))
+		}
+
+		b = bytes.TrimSpace(b)
+
+		port, err = strconv.Atoi(strings.Split(string(b), ":")[1])
+		if err != nil {
+			return fmt.Errorf("failed to parse container port: %w", err)
+		}
+
+		// Удаление контейнера
+		logger.Info("Removing container")
+		rmCmd := exec.Command("docker", "rm", "-f", containerID)
+		if b, err := rmCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to remove container: %w: %s", err, string(b))
+		}
+	} else {
+		logger.Info("Container is not running, searching for free port")
+		// Поиск свободного порта
+		port, err = findFreePort()
+		if err != nil {
+			return fmt.Errorf("failed to find free port: %w", err)
+		}
+
+		logger.Info("Found free port", slog.Int("port", port))
+	}
 
 	// Запуск Docker-контейнера
 	logger.Info("Running Docker container")
-	runCmd := exec.Command("docker", "run", "-d", "-p", fmt.Sprintf("%d:80", port), path.Base(repoURL))
+	runCmd := exec.Command("docker", "run", "-d", "-p", fmt.Sprintf("%d:80", port), imageName)
 	if err := runCmd.Run(); err != nil {
 		return fmt.Errorf("failed to run Docker container: %w", err)
 	}
+
+	logger.Info("Successfully ran Docker container", slog.Int("port", port))
 
 	return nil
 }
@@ -98,7 +142,13 @@ func handleDeploy(w http.ResponseWriter, r *http.Request) {
 
 	logger.Info("Received request", "url", payload.URL)
 
-	if err := CloneAndBuild(payload.URL); err != nil {
+	parsedURL, err := url.Parse(payload.URL)
+	if err != nil {
+		http.Error(w, "Invalid URL", http.StatusBadRequest)
+		return
+	}
+
+	if err := CloneAndBuild(parsedURL); err != nil {
 		logger.Error("Failed to process repository", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
