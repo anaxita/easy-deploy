@@ -41,7 +41,7 @@ func CloneAndBuild(repoURL *url.URL) error {
 	defer os.RemoveAll(tempDir)
 
 	// Клонирование репозитория
-	logger.Info("Cloning repository", "repoURL", repoURL.String(), "temp_dir", tempDir)
+	logger.Info("cloning repository", "repo_url", repoURL.String(), "temp_dir", tempDir)
 
 	cloneCmd := exec.Command("git", "clone", repoURL.String(), tempDir)
 	if b, err := cloneCmd.CombinedOutput(); err != nil {
@@ -53,10 +53,10 @@ func CloneAndBuild(repoURL *url.URL) error {
 	// Проверка наличия Dockerfile
 	dockerfilePath := filepath.Join(tempDir, "Dockerfile")
 	if _, err := os.Stat(dockerfilePath); os.IsNotExist(err) {
-		return fmt.Errorf("Dockerfile not found in repository")
+		return fmt.Errorf("dockerfile not found in repository")
 	}
 
-	logger.Info("Dockerfile found", "path", dockerfilePath)
+	logger.Info("dockerfile found", "path", dockerfilePath)
 
 	// Получение хэша последнего коммита
 	lastCommitHashCmd := exec.Command("git", "-C", tempDir, "rev-parse", "--short", "HEAD")
@@ -167,13 +167,13 @@ func handleDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := CloneAndBuild(parsedURL); err != nil {
-		logger.Error("Failed to process repository", "error", err)
+		logger.Error("clone and build", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("Repository successfully processed"))
+	_, _ = w.Write([]byte("Repository successfully processed"))
 }
 
 func parseJsonConfig(configPath string) (config Config, err error) {
