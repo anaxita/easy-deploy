@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"time"
 
-	"easy-deploy/internal/service"
+	"gitlab.com/anaxita-server/easy-deploy/internal/service"
 )
 
 func NewServer(port int, mux *http.ServeMux) *http.Server {
